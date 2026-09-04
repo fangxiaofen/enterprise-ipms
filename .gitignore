@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# 运行时数据（首次启动自动生成并写入演示数据）
+data/*.db
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+
+# 日志与临时输出
+*.log
+smoke_out.txt
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

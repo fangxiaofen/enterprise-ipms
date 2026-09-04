@@ -4,6 +4,8 @@
 
 数据持久化保存在服务端 SQLite 数据库中，刷新页面或重启服务后数据依然存在，支持完整的增删改查。
 
+**在线演示**：https://25571695a32b49829416bcc2c38c23c2.app.workbuddy.link （内置演示数据，可直接增删改查体验；演示环境数据为共享状态，请勿录入真实知识产权信息）
+
 ---
 
 ## 一、功能特性
@@ -123,6 +125,26 @@ python smoke_test.py                 # 验证全部接口，预期输出「通�
 IPMS_BASE=http://127.0.0.1:9000/api python smoke_test.py
 ```
 
+### 云端部署
+
+服务支持部署到任何注入 `PORT` 环境变量的容器 / PaaS 平台（Heroku 风格），仓库内已附 `requirements.txt`（零依赖）与 `Procfile`。
+
+| 环境变量 | 作用 | 默认值 |
+| --- | --- | --- |
+| `PORT` | 监听端口。**存在时自动判定为部署环境，绑定 `0.0.0.0`** | 无（命令行参数 > `PORT` > 8770） |
+| `IPMS_HOST` | 显式指定绑定地址，优先级最高 | 部署环境 `0.0.0.0`，本地 `127.0.0.1` |
+| `IPMS_DB` | 指定 SQLite 文件路径 | `data/ipms.db` |
+
+启动命令：
+
+```bash
+python server.py --no-browser    # 自动读取 $PORT；本地运行时忽略该变量、仅绑回环
+```
+
+数据库位置有三级保护：优先 `IPMS_DB` → 源码目录下 `data/ipms.db` → **若目录不可写则自动回落到系统临时目录**，因此只读文件系统的部署环境同样可用。
+
+> 部署环境为**单端口、无外部数据库**的沙箱时，本系统开箱可用：存储为 SQLite，随应用进程运行，不依赖 MySQL / Redis 等外部服务。
+
 ---
 
 ## 三、目录结构
@@ -135,6 +157,8 @@ ipms/
 ├── strategy.py            # 战略规则引擎：由台账数据推导规避设计与风险条目
 ├── smoke_test.py          # 接口冒烟测试
 ├── start.bat              # Windows 一键启动
+├── requirements.txt       # 无第三方依赖，仅用于部署平台识别为 Python 项目
+├── Procfile               # 部署启动命令：web: python server.py --no-browser
 ├── data/
 │   └── ipms.db            # SQLite 数据库（首次启动自动生成，未纳入版本库）
 └── static/

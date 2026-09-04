@@ -19,7 +19,12 @@ import api
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
-PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8770
+
+# 端口：命令行位置参数 > 环境变量 PORT（云端部署平台注入）> 默认 8770
+_positional = [a for a in sys.argv[1:] if not a.startswith("-")]
+PORT = int(_positional[0]) if _positional else int(os.environ.get("PORT") or 8770)
+# 绑定地址：平台注入 PORT 时按部署环境处理监听全部网卡，本地运行默认仅回环
+HOST = os.environ.get("IPMS_HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 
 MIME = {".html": "text/html; charset=utf-8", ".js": "application/javascript; charset=utf-8",
         ".css": "text/css; charset=utf-8", ".json": "application/json; charset=utf-8",
@@ -249,21 +254,27 @@ def main():
     if strategy_needed:
         import strategy
         strategy.rebuild()
-    srvs = [ThreadingHTTPServer(("127.0.0.1", PORT), Handler)]
-    # Windows 上 localhost 优先解析到 ::1，只监听 IPv4 会导致 localhost 打不开
-    try:
-        srvs.append(_LoopbackV6Server(("::1", PORT, 0, 0), Handler))
-    except OSError:
-        pass
+    if HOST in ("127.0.0.1", "localhost", "::1"):
+        srvs = [ThreadingHTTPServer(("127.0.0.1", PORT), Handler)]
+        # Windows 上 localhost 优先解析到 ::1，只监听 IPv4 会导致 localhost 打不开
+        try:
+            srvs.append(_LoopbackV6Server(("::1", PORT, 0, 0), Handler))
+        except OSError:
+            pass
+    else:
+        srvs = [ThreadingHTTPServer((HOST, PORT), Handler)]
     url = "http://127.0.0.1:%d/" % PORT
     print("=" * 58)
     print("  Enterprise IP Management System")
-    print("  URL   : %s" % url)
-    print("        : http://localhost:%d/" % PORT)
+    print("  Host  : %s" % HOST)
+    print("  URL   : %s" % (url if HOST in ("127.0.0.1", "::1") else "http://%s:%d/" % (HOST, PORT)))
+    if HOST == "127.0.0.1":
+        print("        : http://localhost:%d/" % PORT)
     print("  DB    : %s" % db.DB_PATH)
     print("  Stop  : Ctrl+C")
     print("=" * 58)
-    if "--no-browser" not in sys.argv:
+    sys.stdout.flush()
+    if "--no-browser" not in sys.argv and HOST in ("127.0.0.1", "::1"):
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()
     for s in srvs[1:]:
         threading.Thread(target=s.serve_forever, daemon=True).start()

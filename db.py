@@ -3,10 +3,29 @@
 import os
 import json
 import sqlite3
+import tempfile
 from datetime import datetime, timedelta
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, "data", "ipms.db")
+
+
+def _resolve_db_path():
+    """数据库位置：优先 IPMS_DB 环境变量，其次源码下的 data/，
+    只读文件系统时回落到系统临时目录，保证云端部署也能写入"""
+    env = os.environ.get("IPMS_DB")
+    if env:
+        return env
+    p = os.path.join(BASE_DIR, "data", "ipms.db")
+    try:
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "ab"):
+            pass
+        return p
+    except OSError:
+        return os.path.join(tempfile.gettempdir(), "ipms.db")
+
+
+DB_PATH = _resolve_db_path()
 
 # 今日基准：用于演示数据的相对日期计算
 TODAY = datetime(2026, 9, 4)
@@ -124,7 +143,10 @@ CREATE INDEX IF NOT EXISTS idx_fees_asset      ON fee_records(asset_id);
 
 
 def init_db():
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    try:
+        os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
+    except OSError:
+        pass          # 只读文件系统下 DB_PATH 已回落到临时目录，目录必然存在
     conn = connect()
     conn.executescript(SCHEMA)
     conn.commit()

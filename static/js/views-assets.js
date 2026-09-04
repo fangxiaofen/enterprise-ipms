@@ -6,8 +6,9 @@
 
   const state = {
     category: '', sub_type: '', status: '', department: '', keyword: '',
-    sort: 'updated_at', order: 'desc', page: 1, total: 0, items: [], loading: false,
+    sort: 'updated_at', order: 'desc', page: 1, total: 0, items: [],
   };
+  let reqSeq = 0;
 
   // 字段标签随类型变化
   const LABEL = {
@@ -90,18 +91,21 @@
 
     load();
 
+    // 用递增序号丢弃过期响应：加载过程中继续筛选也能拿到最新结果
     function load() {
-      if (state.loading) return;
-      state.loading = true;
+      const seq = ++reqSeq;
       API.assets({
         category: state.category, sub_type: state.sub_type, status: state.status,
         department: state.department, keyword: state.keyword, sort: state.sort,
         order: state.order, page: state.page, page_size: 300,
       }).then(d => {
+        if (seq !== reqSeq) return;
         state.items = d.items; state.total = d.total;
-        renderTable($('#tblBox', wrap));
+        const box = $('#tblBox', wrap);
+        if (!box) return;   // 页面已切换，DOM 已销毁
+        renderTable(box);
         $('#cntSub', wrap).textContent = '共 ' + d.total + ' 条';
-      }).catch(e => toast(e.message, 'err')).finally(() => state.loading = false);
+      }).catch(e => { if (seq === reqSeq) toast(e.message, 'err'); });
     }
     global.APP.reloadAssets = load;
   }

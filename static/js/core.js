@@ -20,6 +20,15 @@
   }
 
   // ---------------- 接口 ----------------
+  // GET 的查询参数需拼在 URL 上，不能作为 body 传入
+  function qs(q) {
+    if (!q) return '';
+    const pairs = Object.keys(q)
+      .filter(k => q[k] !== '' && q[k] !== null && q[k] !== undefined)
+      .map(k => encodeURIComponent(k) + '=' + encodeURIComponent(q[k]));
+    return pairs.length ? '?' + pairs.join('&') : '';
+  }
+
   async function req(method, path, body) {
     const opt = { method, headers: { 'Content-Type': 'application/json' } };
     if (body !== undefined) opt.body = JSON.stringify(body);
@@ -34,14 +43,14 @@
     return data.data !== undefined ? data.data : data;
   }
   const API = {
-    get: (p, q) => req('GET', p + (q ? '?' + new URLSearchParams(Object.entries(q).filter(x => x[1] !== '' && x[1] !== null && x[1] !== undefined)).toString() : '')),
+    get: (p, q) => req('GET', p + qs(q)),
     post: (p, b) => req('POST', p, b),
     put: (p, b) => req('PUT', p, b),
     del: (p) => req('DELETE', p),
     meta: () => req('GET', '/api/meta'),
     company: () => req('GET', '/api/company'),
     saveCompany: (b) => req('PUT', '/api/company', b),
-    assets: (q) => req('GET', '/api/assets', q),
+    assets: (q) => req('GET', '/api/assets' + qs(q)),
     asset: (id) => req('GET', '/api/assets/' + id),
     createAsset: (b) => req('POST', '/api/assets', b),
     updateAsset: (id, b) => req('PUT', '/api/assets/' + id, b),
@@ -51,14 +60,14 @@
     addFee: (id, b) => req('POST', '/api/assets/' + id + '/fees', b),
     updateFee: (id, b) => req('PUT', '/api/fees/' + id, b),
     delFee: (id) => req('DELETE', '/api/fees/' + id),
-    strategies: (q) => req('GET', '/api/strategies', q),
+    strategies: (q) => req('GET', '/api/strategies' + qs(q)),
     createStrategy: (b) => req('POST', '/api/strategies', b),
     updateStrategy: (id, b) => req('PUT', '/api/strategies/' + id, b),
     deleteStrategy: (id) => req('DELETE', '/api/strategies/' + id),
     rebuildStrategy: () => req('POST', '/api/strategy/rebuild', {}),
     statsOverview: () => req('GET', '/api/stats/overview'),
     statsTrend: () => req('GET', '/api/stats/trend'),
-    statsExpiry: (days) => req('GET', '/api/stats/expiry', { days }),
+    statsExpiry: (days) => req('GET', '/api/stats/expiry' + qs({ days })),
     statsDist: () => req('GET', '/api/stats/distribution'),
     statsAnalysis: () => req('GET', '/api/stats/analysis'),
     exportData: () => req('GET', '/api/export'),

@@ -8,6 +8,7 @@ import os
 import sys
 import json
 import mimetypes
+import socket
 import threading
 import webbrowser
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
@@ -226,6 +227,16 @@ class Handler(BaseHTTPRequestHandler):
         self._send(code, r)
 
 
+class _LoopbackV6Server(ThreadingHTTPServer):
+    """仅监听 ::1 的 IPv6 服务，与 IPv4 回环并存，不对外网暴露"""
+
+    address_family = socket.AF_INET6
+
+    def server_bind(self):
+        self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+        super().server_bind()
+
+
 def main():
     db.init_db()
     strategy_needed = False
@@ -238,21 +249,30 @@ def main():
     if strategy_needed:
         import strategy
         strategy.rebuild()
-    srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+    srvs = [ThreadingHTTPServer(("127.0.0.1", PORT), Handler)]
+    # Windows 上 localhost 优先解析到 ::1，只监听 IPv4 会导致 localhost 打不开
+    try:
+        srvs.append(_LoopbackV6Server(("::1", PORT, 0, 0), Handler))
+    except OSError:
+        pass
     url = "http://127.0.0.1:%d/" % PORT
     print("=" * 58)
     print("  Enterprise IP Management System")
     print("  URL   : %s" % url)
+    print("        : http://localhost:%d/" % PORT)
     print("  DB    : %s" % db.DB_PATH)
     print("  Stop  : Ctrl+C")
     print("=" * 58)
     if "--no-browser" not in sys.argv:
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+    for s in srvs[1:]:
+        threading.Thread(target=s.serve_forever, daemon=True).start()
     try:
-        srv.serve_forever()
+        srvs[0].serve_forever()
     except KeyboardInterrupt:
         print("\nBye.")
-        srv.shutdown()
+        for s in srvs:
+            s.shutdown()
 
 
 if __name__ == "__main__":

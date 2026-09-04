@@ -10,9 +10,9 @@
   function render(root) {
     root.innerHTML = '<div class="loading">加载统计数据…</div>';
     Promise.all([API.statsOverview(), API.statsTrend(), API.statsExpiry(days),
-      API.statsDist(), API.statsAnalysis()])
-      .then(([ov, tr, ex, dist, ana]) => {
-        DATA = { ov, tr, ex, dist, ana };
+      API.statsDist(), API.statsAnalysis(), API.statsDeep()])
+      .then(([ov, tr, ex, dist, ana, deep]) => {
+        DATA = { ov, tr, ex, dist, ana, deep };
         draw(root, DATA);
       })
       .catch(e => { root.innerHTML = '<div class="empty">' + esc(e.message) + '</div>'; });
@@ -28,7 +28,7 @@
   }
 
   function draw(root, d) {
-    const { ov, tr, ex, dist, ana } = d;
+    const { ov, tr, ex, dist, ana, deep } = d;
     const html =
       // 概览卡片
       '<div class="grid g4" style="margin-bottom:16px">' +
@@ -72,6 +72,16 @@
         (v === 90 ? '90 天' : v === 365 ? '1 年' : v === 730 ? '2 年' : '全部') + '</button>').join('') +
       '</div></div><div class="card-b" id="expiryBox"></div></div>' +
 
+      // 深度分析
+      '<div class="card" style="margin-bottom:16px"><div class="card-h">' +
+      '<h3>深度分析<span class="sub">发明人、技术构成、专利年龄与授权转化</span></h3></div>' +
+      '<div class="card-b">' +
+      '<div class="grid g2">' + chartDiv('d-inventor', true) + chartDiv('d-ipc-sec') + '</div>' +
+      '<div class="grid g2" style="margin-top:8px">' + chartDiv('d-ipc-cls') + chartDiv('d-age') + '</div>' +
+      '<div class="grid g2" style="margin-top:8px">' + chartDiv('d-rate', true) + chartDiv('d-agency') + '</div>' +
+      '<div style="margin-top:8px">' + chartDiv('d-stack', true) + '</div>' +
+      '</div></div>' +
+
       // 综合分析
       '<div class="card"><div class="card-h"><h3>综合分析结论与布局评价</h3>' +
       '<span class="sub">综合得分 ' + (ana.overall || 0) + ' / 100</span></div>' +
@@ -90,6 +100,15 @@
     barH('c-tech', dist.tech_field, '技术领域');
     barV('c-dept', ov.by_department, '部门');
     trendChart('c-trend', tr);
+
+    // 深度分析图表
+    barH('d-inventor', deep.inventors, '发明人 / 作者');
+    pie('d-ipc-sec', deep.ipc_section);
+    barH('d-ipc-cls', deep.ipc_class, '分类号');
+    barV('d-age', deep.patent_age, '专利年龄');
+    rateChart('d-rate', deep.grant_rate);
+    barH('d-agency', deep.agency, '代理机构');
+    stackChart('d-stack', deep.stack);
 
     renderExpiry($('#expiryBox', root));
     renderAnalysis($('#anaBox', root), ana);
@@ -171,6 +190,51 @@
         { name: '申请量', type: 'bar', data: tr.apply, barMaxWidth: 26, itemStyle: { borderRadius: [4, 4, 0, 0], color: '#93b4f7' }, label: { show: true, position: 'top', fontSize: 11, color: '#6b7280' } },
         { name: '授权量', type: 'line', data: tr.grant, smooth: true, symbolSize: 7, lineStyle: { width: 2.5, color: '#12a150' }, itemStyle: { color: '#12a150' }, areaStyle: { color: 'rgba(18,161,80,.08)' } },
       ],
+    }));
+  }
+
+  function rateChart(id, g) {
+    if (!g || !g.years || !g.years.length) {
+      if ($('#' + id)) $('#' + id).innerHTML = emptyBlock('暂无数据');
+      return;
+    }
+    chart(id, Object.assign(baseOption(), {
+      tooltip: Object.assign({ trigger: 'axis' }, baseOption().tooltip),
+      legend: { top: 0, itemWidth: 10, itemHeight: 10, textStyle: { fontSize: 12, color: '#4b5563' },
+        data: ['申请量', '已授权', '授权率'] },
+      grid: { left: 12, right: 40, top: 40, bottom: 10, containLabel: true },
+      xAxis: { type: 'category', data: g.years, axisLine: { lineStyle: { color: '#e5e8ef' } }, axisLabel: { color: '#4b5563', fontSize: 12 } },
+      yAxis: [
+        { type: 'value', name: '件数', nameTextStyle: { color: '#8a94a6', fontSize: 11 }, splitLine: { lineStyle: { color: '#f0f2f7' } }, axisLabel: { color: '#8a94a6', fontSize: 11 } },
+        { type: 'value', name: '授权率', nameTextStyle: { color: '#8a94a6', fontSize: 11 }, max: 100, splitLine: { show: false }, axisLabel: { color: '#8a94a6', fontSize: 11, formatter: '{value}%' } },
+      ],
+      series: [
+        { name: '申请量', type: 'bar', data: g.apply, barMaxWidth: 24, itemStyle: { borderRadius: [4, 4, 0, 0], color: '#93b4f7' } },
+        { name: '已授权', type: 'bar', data: g.granted, barMaxWidth: 24, itemStyle: { borderRadius: [4, 4, 0, 0], color: '#2563eb' } },
+        { name: '授权率', type: 'line', yAxisIndex: 1, data: g.rate, smooth: true, symbolSize: 7, lineStyle: { width: 2.5, color: '#12a150' }, itemStyle: { color: '#12a150' }, label: { show: true, formatter: '{c}%', fontSize: 10, color: '#6b7280' } },
+      ],
+    }));
+  }
+
+  function stackChart(id, s) {
+    if (!s || !s.categories || !s.categories.length) {
+      if ($('#' + id)) $('#' + id).innerHTML = emptyBlock('暂无数据');
+      return;
+    }
+    const series = [
+      { name: '有效', type: 'bar', stack: 't', data: s.valid, itemStyle: { color: '#12a150' } },
+      { name: '审查/申请中', type: 'bar', stack: 't', data: s.pending, itemStyle: { color: '#2563eb' } },
+      { name: '失效/驳回', type: 'bar', stack: 't', data: s.dead, itemStyle: { color: '#9aa4b8' } },
+    ];
+    chart(id, Object.assign(baseOption(), {
+      tooltip: Object.assign({ trigger: 'axis', axisPointer: { type: 'shadow' } }, baseOption().tooltip),
+      legend: { top: 0, itemWidth: 10, itemHeight: 10, textStyle: { fontSize: 12, color: '#4b5563' } },
+      grid: { left: 12, right: 20, top: 40, bottom: 10, containLabel: true },
+      xAxis: { type: 'category', data: s.categories, axisLine: { lineStyle: { color: '#e5e8ef' } }, axisLabel: { color: '#4b5563', fontSize: 12 } },
+      yAxis: { type: 'value', splitLine: { lineStyle: { color: '#f0f2f7' } }, axisLabel: { color: '#8a94a6', fontSize: 11 } },
+      series: series.map((x, i) => i === series.length - 1
+        ? Object.assign(x, { itemStyle: Object.assign({}, x.itemStyle, { borderRadius: [4, 4, 0, 0] }), barMaxWidth: 46, label: { show: true, position: 'top', fontSize: 11, color: '#6b7280' } })
+        : Object.assign(x, { barMaxWidth: 46 })),
     }));
   }
 

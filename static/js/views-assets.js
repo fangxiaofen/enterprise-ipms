@@ -44,7 +44,10 @@
       '<button class="btn" id="f-reset">重置</button>' +
       '</div></div></div>' +
       '<div class="card"><div class="card-h"><h3>知识产权台账<span class="sub" id="cntSub"></span></h3>' +
-      '<div style="display:flex;gap:10px;align-items:center">' +
+      '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
+      '<button class="btn btn-sm" id="btn-import">批量导入 CSV</button>' +
+      '<button class="btn btn-sm" id="btn-xls">导出 Excel</button>' +
+      '<button class="btn btn-sm" id="btn-csv">导出 CSV</button>' +
       '<button class="btn btn-primary btn-sm" id="btn-add">+ 新建</button></div></div>' +
       '<div class="card-b tight"><div id="tblBox"><div class="loading">加载中…</div></div></div></div>';
 
@@ -88,6 +91,10 @@
       render(root);
     });
     $('#btn-add', wrap).addEventListener('click', () => openForm(null, () => load()));
+    $('#btn-xls', wrap).addEventListener('click', () => global.IO.exportXls());
+    $('#btn-csv', wrap).addEventListener('click', () => global.IO.exportCsv());
+    $('#btn-import', wrap).addEventListener('click', () =>
+      global.IO.openImport(() => { load(); global.APP.refreshBadges && global.APP.refreshBadges(); }));
 
     load();
 

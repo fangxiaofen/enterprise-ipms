@@ -109,6 +109,16 @@ class Handler(BaseHTTPRequestHandler):
                 r = api.stats_distribution(conn, q)
             elif p == "/api/stats/analysis":
                 r = api.stats_analysis(conn, q)
+            elif p == "/api/stats/deep":
+                r = api.stats_deep(conn, q)
+            elif p == "/api/calendar":
+                r = api.calendar(conn, q)
+            elif p == "/api/export/csv":
+                r = api.export_csv(conn, q)
+            elif p == "/api/export/xls":
+                r = api.export_xls(conn, q)
+            elif p == "/api/template/csv":
+                r = api.template_csv(conn, q)
             elif p == "/api/strategies":
                 r = api.list_strategies(conn, q)
             elif p == "/api/meta":
@@ -151,6 +161,8 @@ class Handler(BaseHTTPRequestHandler):
                 r = api.rebuild_strategy(conn, body)
             elif p == "/api/import":
                 r = api.import_data(conn, body.get("data") if "data" in body else body)
+            elif p == "/api/import/csv":
+                r = api.import_csv(conn, body)
             elif p == "/api/reset":
                 r = api.reset_data(conn, body)
             else:

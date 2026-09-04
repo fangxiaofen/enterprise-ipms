@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
 """企业知识产权管理系统 - 业务接口层"""
+import io
+import csv
 import json
 import sqlite3
 import re
-from collections import OrderedDict
-from datetime import date, datetime
+from collections import OrderedDict, Counter
+from datetime import date, datetime, timedelta
 
 from db import connect
 import strategy as strategy_mod
@@ -807,3 +809,455 @@ def get_meta(conn, q=None):
     return ok({"categories": CATEGORIES, "statuses": STATUSES, "departments": DEPARTMENTS,
                "regions": REGIONS, "levels": LEVELS, "modules": MODULE_NAMES,
                "today": TODAY.isoformat()})
+
+
+# --------------------------------------------------------------------------
+# 期限日历
+# --------------------------------------------------------------------------
+def _level(days, done=False):
+    if done:
+        return "done"
+    if days is None:
+        return "low"
+    if days < 0:
+        return "overdue"
+    if days <= 30:
+        return "high"
+    if days <= 90:
+        return "medium"
+    return "low"
+
+
+def calendar(conn, q=None):
+    q = q or {}
+    try:
+        year = int(q.get("year") or TODAY.year)
+        month = int(q.get("month") or TODAY.month)
+    except Exception:
+        year, month = TODAY.year, TODAY.month
+    if month < 1:
+        month, year = 12, year - 1
+    if month > 12:
+        month, year = 1, year + 1
+
+    rows = _all_assets(conn)
+    items = []
+    for a in rows:
+        if a["status"] in ("失效", "终止", "驳回", "撤回"):
+            continue
+        base = {"id": a["id"], "name": a["name"], "category": a["category"],
+                "sub_type": a["sub_type"], "no": a.get("grant_no") or a.get("app_no") or "",
+                "department": a["department"], "status": a["status"]}
+        # 年费 / 续展缴费
+        if a.get("next_fee_date"):
+            d = _days(a["next_fee_date"])
+            items.append(dict(base, kind="年费缴纳", date=a["next_fee_date"], days=d,
+                              note="第 %s 年度" % (a.get("fee_year") or "—"),
+                              level=_level(d, bool(a.get("fee_paid")))))
+        # 保护期届满 / 续展
+        if a.get("protect_end"):
+            d = _days(a["protect_end"])
+            if a["category"] == "商标":
+                kind, note = "商标续展截止", "专用权届满，续展窗口为届满前 12 个月"
+            elif a["category"] == "数据知识产权":
+                kind, note = "登记续展截止", "登记证书有效期 2 年，需办理续展"
+            else:
+                kind, note = "保护期届满", "技术方案进入公有领域"
+            items.append(dict(base, kind=kind, date=a["protect_end"], days=d, note=note,
+                              level=_level(d)))
+        # 发明专利提实审期限
+        if a["sub_type"] == "发明专利" and a["status"] == "申请中" and a.get("app_date"):
+            ad = _d(a["app_date"])
+            if ad:
+                dl = ad.replace(year=ad.year + 3)
+                d = _days(dl.isoformat())
+                items.append(dict(base, kind="提实审期限", date=dl.isoformat(), days=d,
+                                  note="实质审查请求应自申请日起 3 年内提出",
+                                  level=_level(d)))
+
+    in_month, overdue = [], []
+    for it in items:
+        if it["days"] is not None and it["days"] < 0 and it["level"] == "overdue":
+            overdue.append(it)
+        if (it.get("date") or "")[:7] == "%04d-%02d" % (year, month):
+            in_month.append(it)
+    in_month.sort(key=lambda x: (x["date"], 0 if x["level"] == "overdue" else 1))
+    overdue.sort(key=lambda x: x["date"])
+
+    days_map = {}
+    for it in in_month:
+        days_map.setdefault(it["date"], []).append(it)
+
+    summary = Counter(x["level"] for x in in_month)
+    return ok({
+        "year": year, "month": month,
+        "days": days_map,
+        "list": in_month,
+        "overdue": overdue[:20],
+        "summary": {"total": len(in_month), "overdue": summary.get("overdue", 0),
+                    "high": summary.get("high", 0), "medium": summary.get("medium", 0),
+                    "low": summary.get("low", 0), "done": summary.get("done", 0),
+                    "overdue_total": len(overdue)},
+    })
+
+
+# --------------------------------------------------------------------------
+# 深度分析
+# --------------------------------------------------------------------------
+IPC_SECTIONS = {
+    "A": "A 人类生活必需", "B": "B 作业与运输", "C": "C 化学与冶金",
+    "D": "D 纺织与造纸", "E": "E 固定建筑物", "F": "F 机械工程·照明·加热",
+    "G": "G 物理", "H": "H 电学",
+}
+
+
+def stats_deep(conn, q=None):
+    rows = _all_assets(conn)
+
+    # 发明人 / 作者排行（排除法人主体，仅统计自然人）
+    co = conn.execute("SELECT name FROM company WHERE id=1").fetchone()
+    co_name = (co["name"] if co else "") or ""
+    people = Counter()
+    for a in rows:
+        applicant = (a.get("applicant") or "").strip()
+        for n in re.split(r"[;；,，、/]\s*", a.get("creators") or ""):
+            n = n.strip()
+            if not n or n in ("—", "-", "无"):
+                continue
+            if n == applicant or n == co_name:
+                continue                      # 法人作品的权利人不计入发明人
+            # 法人主体与内设部门不计入自然人发明人
+            if re.search(r"(公司|研究院|大学|学院|事务所|集团|中心|部门|事业部|厂)$|公司|（法人", n):
+                continue
+            people[n] += 1
+    inventors = [{"name": k, "value": v} for k, v in people.most_common(10)]
+
+    # 分类号分布：IPC 部 + 小类，兼顾洛迦诺与尼斯
+    sec, cls, nice = Counter(), Counter(), Counter()
+    for a in rows:
+        cn = a.get("class_no") or ""
+        lo = re.findall(r"洛迦诺\s*([\d\-]+)", cn)
+        ni = re.findall(r"第\s*(\d+)\s*类", cn)
+        ipc_codes = re.findall(r"\b([A-H]\d{2}[A-Z]?)\b", cn)
+        for x in lo:
+            cls["洛迦诺 " + x] += 1
+        for x in ni:
+            nice["第 %s 类" % x] += 1
+        for c in ipc_codes:
+            sec[c[0]] += 1
+            cls[c[:4]] += 1
+    ipc_section = [{"name": IPC_SECTIONS.get(k, k), "value": v}
+                   for k, v in sorted(sec.items(), key=lambda x: -x[1])]
+    ipc_class = [{"name": k, "value": v} for k, v in cls.most_common(10)]
+
+    # 专利年龄分布
+    age_buckets = [("未满 3 年", 0, 3), ("3–5 年", 3, 5), ("5–10 年", 5, 10),
+                   ("10–15 年", 10, 15), ("15 年以上", 15, 999)]
+    ages = Counter()
+    for a in rows:
+        if a["category"] != "专利":
+            continue
+        ad = _d(a.get("app_date"))
+        if not ad:
+            continue
+        y = (TODAY - ad).days / 365.25
+        for nm, lo, hi in age_buckets:
+            if lo <= y < hi:
+                ages[nm] += 1
+                break
+    patent_age = [{"name": nm, "value": ages.get(nm, 0)} for nm, _, _ in age_buckets]
+
+    # 申请—授权转化率（按申请年 cohort）
+    cohort = {}
+    for a in rows:
+        if a["category"] != "专利":
+            continue
+        y = (a.get("app_date") or "")[:4]
+        if not y.isdigit():
+            continue
+        c = cohort.setdefault(int(y), {"total": 0, "granted": 0})
+        c["total"] += 1
+        if a.get("grant_date"):
+            c["granted"] += 1
+    ys = sorted(cohort.keys())
+    grant_rate = {
+        "years": [str(y) for y in ys],
+        "apply": [cohort[y]["total"] for y in ys],
+        "granted": [cohort[y]["granted"] for y in ys],
+        "rate": [round(cohort[y]["granted"] / cohort[y]["total"] * 100, 1) for y in ys],
+    }
+
+    # 代理机构分布
+    ag = Counter(a.get("agency") or "未填写" for a in rows)
+    agency = [{"name": k, "value": v} for k, v in ag.most_common(8)]
+
+    # 有效 / 失效构成（按大类）
+    cats = list(CATEGORIES.keys())
+    stack = {
+        "categories": cats,
+        "valid": [sum(1 for a in rows if a["category"] == c and a["status"] in VALID_STATUS) for c in cats],
+        "pending": [sum(1 for a in rows if a["category"] == c and a["status"] in PENDING_STATUS) for c in cats],
+        "dead": [sum(1 for a in rows if a["category"] == c and a["status"] in DEAD_STATUS) for c in cats],
+    }
+
+    return ok({"inventors": inventors, "ipc_section": ipc_section, "ipc_class": ipc_class,
+               "nice_class": [{"name": k, "value": v} for k, v in nice.most_common(10)],
+               "patent_age": patent_age, "grant_rate": grant_rate,
+               "agency": agency, "stack": stack})
+
+
+# --------------------------------------------------------------------------
+# Excel / CSV 导入导出
+# --------------------------------------------------------------------------
+CSV_FIELDS = [
+    ("category", "知识产权类型"), ("sub_type", "子类型"), ("name", "名称"),
+    ("app_no", "申请号/登记申请号"), ("grant_no", "授权号/登记号/注册号"),
+    ("app_date", "申请日"), ("grant_date", "授权日/登记日/注册日"),
+    ("applicant", "申请人/权利人"), ("creators", "发明人/作者/设计人"),
+    ("agency", "代理机构"), ("class_no", "分类号"), ("tech_field", "技术领域/商品类别"),
+    ("department", "归属部门"), ("region", "保护地域"), ("status", "当前状态"),
+    ("status_date", "状态更新日期"), ("fee_year", "年费年度"), ("fee_paid", "本期已缴"),
+    ("next_fee_date", "下一年费/续展截止日"), ("protect_start", "保护期起始日"),
+    ("protect_end", "保护期届满日"), ("scope_text", "保护范围描述"),
+    ("scope_items", "保护范围要点"), ("key_points", "核心要点"),
+    ("rival_ref", "竞争对手/参照专利族"), ("remark", "备注"),
+]
+CSV_HEADER = [t for _, t in CSV_FIELDS]
+CSV_KEYS = [k for k, _ in CSV_FIELDS]
+
+SAMPLE_ROW = [
+    "专利", "发明专利", "示例：一种基于负压反馈的自适应抓取控制方法",
+    "202610123456.7", "ZL202610123456.7", "2026-01-15", "2026-08-01",
+    "衢州量智科技有限公司", "张三; 李四", "XX专利代理事务所",
+    "B25J 15/06 (2006.01)", "智能装备", "研发中心", "国内", "有效", "2026-08-01",
+    "1", "未缴", "2027-01-15", "2026-01-15", "2046-01-14",
+    "权利要求 1：……", "独立权利要求 1 项 | 从属权利要求 10 项", "负压变化率判漏",
+    "—", "备注信息",
+]
+
+
+def _export_assets(conn):
+    out = []
+    for r in conn.execute("SELECT * FROM assets ORDER BY category, id"):
+        a = _row2dict(r)
+        a["scope_items"] = " | ".join(a.get("scope_items") or [])
+        a["fee_paid"] = "已缴" if a.get("fee_paid") else "未缴"
+        a["scope_text"] = (a.get("scope_text") or "").replace("\n", " ")
+        out.append(a)
+    return out
+
+
+def export_csv(conn, q=None):
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(CSV_HEADER)
+    for a in _export_assets(conn):
+        w.writerow([a.get(k, "") if a.get(k) is not None else "" for k in CSV_KEYS])
+    name = "知识产权台账-%s.csv" % TODAY.isoformat()
+    return ok({"csv": buf.getvalue(), "filename": name, "count": len(_export_assets(conn))})
+
+
+def _xesc(s):
+    return (str(s if s is not None else "")
+            .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            .replace('"', "&quot;"))
+
+
+def export_xls(conn, q=None):
+    """生成 SpreadsheetML 2003 工作簿（.xls），Excel / WPS 可直接打开，无需第三方库"""
+    data = _export_assets(conn)
+    company = conn.execute("SELECT * FROM company WHERE id=1").fetchone()
+    co = dict(company) if company else {}
+
+    def sheet(name, rows, widths):
+        h = ['<Worksheet ss:Name="%s"><Table>' % _xesc(name)]
+        h.append('<Column ss:Width="%d"/>' % 40)
+        for w in widths:
+            h.append('<Column ss:Width="%d"/>' % w)
+        for ri, row in enumerate(rows):
+            style = ' ss:StyleID="hdr"' if ri == 0 else ""
+            h.append("<Row%s>" % style)
+            for cell in row:
+                is_num = isinstance(cell, (int, float)) and not isinstance(cell, bool)
+                t = "Number" if is_num else "String"
+                h.append('<Cell%s><Data ss:Type="%s">%s</Data></Cell>' % ("" if ri else ' ss:StyleID="hdr"', t, _xesc(cell)))
+            h.append("</Row>")
+        h.append("</Table><WorksheetOptions xmlns=\"urn:schemas-microsoft-com:office:excel\">"
+                 "<FreezePanes/><SplitHorizontal>1</SplitHorizontal>"
+                 "<TopRowBottomPane>1</TopRowBottomPane><ActivePane>2</ActivePane>"
+                 "</WorksheetOptions></Worksheet>")
+        return "".join(h)
+
+    main = [CSV_HEADER]
+    for a in data:
+        main.append([a.get(k, "") if a.get(k) is not None else "" for k in CSV_KEYS])
+    widths = [90] * len(CSV_HEADER)
+
+    stat_rows = [["统计项", "数值"]]
+    ov = stats_overview(conn)["data"]
+    stat_rows += [
+        ["企业名称", co.get("name", "")],
+        ["统一社会信用代码", co.get("credit_code", "")],
+        ["台账导出日期", TODAY.isoformat()],
+        ["知识产权总量", ov["total"]],
+        ["有效权利", ov["valid"]],
+        ["审查 / 申请中", ov["pending"]],
+        ["失效 / 驳回", ov["dead"]],
+        ["权利有效率", "%.1f%%" % ov["valid_rate"]],
+        ["风险预警项", ov["risk"]],
+    ]
+    for item in ov["by_category"]:
+        stat_rows.append(["　" + item["name"], item["value"]])
+    for item in ov["by_status"]:
+        stat_rows.append(["　状态：" + item["name"], item["value"]])
+
+    xml = ('<?xml version="1.0" encoding="UTF-8"?>\n'
+           '<?mso-application progid="Excel.Sheet"?>\n'
+           '<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" '
+           'xmlns:o="urn:schemas-microsoft-com:office:office" '
+           'xmlns:x="urn:schemas-microsoft-com:office:excel" '
+           'xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">'
+           '<Styles>'
+           '<Style ss:ID="hdr"><Font ss:Bold="1" ss:Color="#1F3864"/>'
+           '<Interior ss:Color="#DCE6F1" ss:Pattern="Solid"/>'
+           '<Alignment ss:Vertical="Center" ss:WrapText="1"/></Style>'
+           '</Styles>')
+    xml += sheet("统计汇总", stat_rows, [200])
+    xml += sheet("知识产权台账", main, widths)
+    xml += "</Workbook>"
+    return ok({"xml": xml, "filename": "知识产权台账-%s.xls" % TODAY.isoformat(),
+               "count": len(data)})
+
+
+def template_csv(conn=None, q=None):
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(CSV_HEADER)
+    w.writerow(SAMPLE_ROW)
+    return ok({"csv": buf.getvalue(), "filename": "知识产权导入模板.csv",
+               "fields": CSV_HEADER,
+               "tips": "填写说明：①「知识产权类型」须为 专利 / 著作权 / 数据知识产权 / 商标；"
+                       "②「子类型」须与所选类型匹配，如发明专利、实用新型专利、外观设计专利、"
+                       "软件著作权、作品著作权、数据资源登记、数据产品登记、注册商标；"
+                       "③日期统一使用 YYYY-MM-DD 格式；④「保护范围要点」多项之间用 | 分隔；"
+                       "⑤「本期已缴」填 已缴 / 未缴；⑥「申请号/登记申请号」相同视为同一条记录，"
+                       "导入时按追加更新处理；⑦「名称」为必填项。"})
+
+
+def import_csv(conn, body=None):
+    body = body or {}
+    text = body.get("csv") or ""
+    mode = body.get("mode", "append")
+    if not text.strip():
+        return err("CSV 内容为空")
+
+    # 容错：跳过 UTF-8 BOM，按表头定位列
+    if text and text[0] == "\ufeff":
+        text = text[1:]
+    reader = csv.reader(io.StringIO(text))
+    rows = [r for r in reader if any((c or "").strip() for c in r)]
+    if len(rows) < 2:
+        return err("CSV 至少需要表头与一行数据")
+
+    header = [(c or "").strip() for c in rows[0]]
+    rev = {}
+    for k, t in CSV_FIELDS:
+        rev[t] = k
+        rev[k] = k
+    idx = {}
+    for i, h in enumerate(header):
+        if h in rev:
+            idx[rev[h]] = i
+    if "name" not in idx:
+        return err("未识别到「名称」列，请使用系统导出的模板")
+
+    created = updated = skipped = 0
+    errors = []
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    if mode == "replace":
+        conn.execute("DELETE FROM fee_records")
+        conn.execute("DELETE FROM status_logs")
+        conn.execute("DELETE FROM assets")
+        conn.commit()
+
+    exist_no = {}
+    exist_name = {}
+    for r in conn.execute("SELECT id, app_no, name FROM assets"):
+        if r["app_no"]:
+            exist_no[r["app_no"].strip()] = r["id"]
+        exist_name[r["name"].strip()] = r["id"]
+
+    for ri, row in enumerate(rows[1:], start=2):
+        def cell(key):
+            i = idx.get(key)
+            return (row[i].strip() if i is not None and i < len(row) else "")
+
+        name = cell("name")
+        if not name:
+            skipped += 1
+            errors.append({"row": ri, "msg": "名称为空，已跳过"})
+            continue
+        cat = cell("category") or "专利"
+        if cat not in CATEGORIES:
+            skipped += 1
+            errors.append({"row": ri, "name": name, "msg": "知识产权类型「%s」不合法" % cat})
+            continue
+        sub = cell("sub_type")
+        if sub and sub not in CATEGORIES[cat]:
+            errors.append({"row": ri, "name": name,
+                           "msg": "子类型「%s」与类型「%s」不匹配，已按类型默认处理" % (sub, cat)})
+            sub = ""
+        if not sub:
+            sub = CATEGORIES[cat][0]
+
+        paid_raw = cell("fee_paid")
+        rec = {
+            "category": cat, "sub_type": sub, "name": name,
+            "app_no": cell("app_no"), "grant_no": cell("grant_no"),
+            "app_date": cell("app_date"), "grant_date": cell("grant_date"),
+            "applicant": cell("applicant"), "creators": cell("creators"),
+            "agency": cell("agency"), "class_no": cell("class_no"),
+            "tech_field": cell("tech_field"), "department": cell("department"),
+            "region": cell("region") or "国内",
+            "status": cell("status") or "申请中", "status_date": cell("status_date"),
+            "fee_year": cell("fee_year") or 0,
+            "fee_paid": 1 if paid_raw in ("已缴", "是", "1", "Y", "y", "已缴纳") else 0,
+            "next_fee_date": cell("next_fee_date"),
+            "protect_start": cell("protect_start"), "protect_end": cell("protect_end"),
+            "scope_text": cell("scope_text"),
+            "scope_items": [s.strip() for s in re.split(r"[|｜]", cell("scope_items")) if s.strip()],
+            "key_points": cell("key_points"), "rival_ref": cell("rival_ref"),
+            "remark": cell("remark"),
+        }
+        key = (rec["app_no"] or "").strip()
+        aid = exist_no.get(key) if key else exist_name.get(name)
+
+        if aid:
+            data = _norm_asset_body({**dict(conn.execute(
+                "SELECT * FROM assets WHERE id=?", (aid,)).fetchone()), **rec})
+            data["updated_at"] = now
+            sets = ",".join(f"{k}=?" for k in data.keys())
+            conn.execute(f"UPDATE assets SET {sets} WHERE id=?", list(data.values()) + [aid])
+            updated += 1
+        else:
+            data = _norm_asset_body(rec)
+            data["created_at"] = now
+            data["updated_at"] = now
+            cols = ",".join(data.keys())
+            ph = ",".join("?" * len(data))
+            cur = conn.execute(f"INSERT INTO assets ({cols}) VALUES ({ph})", list(data.values()))
+            aid = cur.lastrowid
+            created += 1
+            if key:
+                exist_no[key] = aid
+            exist_name[name] = aid
+            if rec["status"]:
+                conn.execute(
+                    "INSERT INTO status_logs(asset_id,change_date,old_status,new_status,note,created_at)"
+                    " VALUES (?,?,?,?,?,?)",
+                    (aid, rec.get("status_date") or rec.get("app_date") or TODAY.isoformat(),
+                     "", rec["status"], "批量导入建档", now))
+    conn.commit()
+    return ok({"created": created, "updated": updated, "skipped": skipped,
+               "errors": errors[:30], "error_total": len(errors)})

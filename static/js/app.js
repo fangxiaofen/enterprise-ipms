@@ -7,9 +7,11 @@
   const NAV = [
     { id: 'dashboard', ico: '◱', name: '概览', title: '概览', desc: '企业知识产权资产全景' },
     { id: 'company', ico: '🏢', name: '企业信息', title: '企业基本信息', desc: '维护企业主体与知识产权管理信息' },
-    { id: 'assets', ico: '📑', name: '知识产权管理', title: '知识产权管理', desc: '台账维护、检索与全生命周期记录' },
+    { id: 'assets', ico: '📑', name: '知识产权管理', title: '知识产权管理', desc: '台账维护、检索与批量导入导出' },
+    { id: 'calendar', ico: '📅', name: '期限日历', title: '期限日历', desc: '年费、续展、到期与提实审期限的月历视图' },
     { id: 'stats', ico: '📊', name: '统计分析', title: '统计分析', desc: '数量结构、趋势、到期与布局评价' },
     { id: 'strategy', ico: '🎯', name: '战略中心', title: '战略中心', desc: '规避设计战略与风险战略' },
+    { id: 'report', ico: '🖨', name: '报表打印', title: '台账报表', desc: 'A4 排版台账报表，可打印或另存 PDF' },
     { id: 'settings', ico: '⚙', name: '系统设置', title: '系统设置', desc: '数据备份、恢复与系统信息' },
   ];
 
@@ -74,8 +76,10 @@
     if (route === 'dashboard') renderDashboard(view);
     else if (route === 'company') renderCompany(view);
     else if (route === 'assets') global.Views.assets.render(view);
+    else if (route === 'calendar') global.Views.calendar.render(view);
     else if (route === 'stats') global.Views.stats.render(view);
     else if (route === 'strategy') global.Views.strategy.render(view);
+    else if (route === 'report') global.Views.report.render(view);
     else if (route === 'settings') renderSettings(view);
   }
   global.go = go;
@@ -258,6 +262,19 @@
       '<button class="btn btn-primary" id="btn-export">导出数据备份（JSON）</button>' +
       '<button class="btn" id="btn-import">导入备份文件</button>' +
       '<input type="file" id="file-input" accept=".json" style="display:none">' +
+      '</div>' +
+      '<div class="divider"></div>' +
+      '<div style="font-size:12.5px;font-weight:600;color:var(--text-2);margin-bottom:8px">' +
+      '台账表格导入导出</div>' +
+      '<div style="font-size:13px;line-height:1.9;color:var(--text-2);margin-bottom:12px">' +
+      '导出 Excel 或 CSV 台账用于外部核对与汇报；批量导入支持从 Excel 另存的 CSV 文件一次性录入台账，' +
+      '以申请号 / 登记申请号为唯一标识，已存在则更新、不存在则新建。' +
+      '</div>' +
+      '<div style="display:flex;gap:10px;flex-wrap:wrap">' +
+      '<button class="btn" id="btn-tpl">下载导入模板</button>' +
+      '<button class="btn" id="btn-xls">导出 Excel 台账</button>' +
+      '<button class="btn" id="btn-csv">导出 CSV 台账</button>' +
+      '<button class="btn" id="btn-csv-import">批量导入 CSV</button>' +
       '</div></div></div>' +
 
       '<div class="card"><div class="card-h"><h3>数据与建议维护</h3></div><div class="card-b">' +
@@ -296,6 +313,11 @@
       '</div></div></div>';
 
     $('#btn-export', root).addEventListener('click', doExport);
+    $('#btn-tpl', root).addEventListener('click', () => global.IO.downloadTemplate());
+    $('#btn-xls', root).addEventListener('click', () => global.IO.exportXls());
+    $('#btn-csv', root).addEventListener('click', () => global.IO.exportCsv());
+    $('#btn-csv-import', root).addEventListener('click', () =>
+      global.IO.openImport(() => { }));
     $('#btn-import', root).addEventListener('click', () => $('#file-input', root).click());
     $('#file-input', root).addEventListener('change', e => {
       const f = e.target.files[0];

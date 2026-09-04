@@ -292,3 +292,64 @@ table.tbl .tr-click { cursor: pointer; }
 .concl { padding: 12px 14px; background: #fafbfd; border-left: 3px solid var(--primary); border-radius: 0 7px 7px 0; margin-bottom: 10px; font-size: 13px; line-height: 1.8; color: var(--text-2); }
 .sugg { padding: 9px 12px 9px 26px; font-size: 13px; line-height: 1.7; color: var(--text-2); position: relative; }
 .sugg::before { content: "→"; position: absolute; left: 8px; color: var(--primary); }
+
+/* ---------- 期限日历 ---------- */
+.cal-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
+.cal-bar .ym { font-size: 16px; font-weight: 600; min-width: 130px; text-align: center; }
+.cal-legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--text-2); margin-left: auto; }
+.cal-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+.cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); border-top: 1px solid var(--border); border-left: 1px solid var(--border); }
+.cal-dow {
+  background: #fafbfd; padding: 8px 6px; text-align: center; font-size: 12px; color: var(--muted);
+  border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); font-weight: 500;
+}
+.cal-cell {
+  min-height: 108px; padding: 6px; border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border); background: #fff; vertical-align: top;
+}
+.cal-cell.other { background: #fbfcfe; }
+.cal-cell.today { background: #fffdf5; box-shadow: inset 0 0 0 2px rgba(37,99,235,.35); }
+.cal-day { font-size: 12.5px; color: var(--text-2); font-weight: 600; margin-bottom: 4px; }
+.cal-cell.other .cal-day { color: #c3cbd9; }
+.cal-cell.today .cal-day { color: var(--primary); }
+.cal-item {
+  font-size: 11px; line-height: 1.35; padding: 3px 6px; border-radius: 4px; margin-bottom: 3px;
+  cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  border-left: 3px solid transparent;
+}
+.cal-item:hover { filter: brightness(.96); }
+.cal-item .ci-kind { opacity: .8; font-size: 10px; }
+.lv-overdue { background: #fdecec; border-left-color: #dc2626; color: #991b1b; }
+.lv-high { background: #fef4e6; border-left-color: #d97706; color: #92400e; }
+.lv-medium { background: #eff4ff; border-left-color: #2563eb; color: #1e40af; }
+.lv-low { background: #f1f3f7; border-left-color: #9aa4b8; color: #4b5563; }
+.lv-done { background: #e8f7ef; border-left-color: #12a150; color: #065f36; }
+.lg-overdue { background: #dc2626; } .lg-high { background: #d97706; }
+.lg-medium { background: #2563eb; } .lg-low { background: #9aa4b8; } .lg-done { background: #12a150; }
+
+/* ---------- 打印报表 ---------- */
+.rpt { background: #fff; padding: 32px 36px; max-width: 210mm; margin: 0 auto; box-shadow: var(--shadow); }
+.rpt-h { text-align: center; border-bottom: 2px solid #1f3864; padding-bottom: 14px; margin-bottom: 18px; }
+.rpt-h h2 { font-size: 20px; font-weight: 700; letter-spacing: 1px; }
+.rpt-h .sub { font-size: 12px; color: var(--muted); margin-top: 6px; }
+.rpt-meta { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px 18px; font-size: 12px; color: var(--text-2); margin-bottom: 18px; }
+.rpt-sec { margin-bottom: 20px; }
+.rpt-sec > h4 { font-size: 13.5px; font-weight: 700; margin-bottom: 8px; border-left: 3px solid #1f3864; padding-left: 8px; }
+.rpt table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+.rpt table th, .rpt table td { border: 1px solid #b9c2d0; padding: 5px 7px; text-align: left; }
+.rpt table th { background: #eef2f8; font-weight: 600; }
+.rpt table td.c, .rpt table th.c { text-align: center; }
+.rpt-foot { margin-top: 22px; display: flex; justify-content: space-between; font-size: 11.5px; color: var(--muted); }
+.rpt-tip { max-width: 210mm; margin: 0 auto 14px; }
+
+@media print {
+  body { background: #fff; }
+  .sidebar, .topbar, .no-print, .toast-wrap { display: none !important; }
+  .layout, .main { display: block; height: auto; overflow: visible; }
+  .view { padding: 0; overflow: visible; height: auto; }
+  .rpt { box-shadow: none; max-width: none; padding: 0; }
+  .rpt table { page-break-inside: auto; }
+  .rpt table tr { page-break-inside: avoid; page-break-after: auto; }
+  .rpt-sec { page-break-inside: avoid; }
+  @page { size: A4; margin: 14mm 12mm; }
+}

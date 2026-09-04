@@ -5,7 +5,8 @@ import urllib.request
 import urllib.error
 from urllib.parse import quote
 
-BASE = "http://127.0.0.1:8770/api"
+import os
+BASE = os.environ.get("IPMS_BASE", "http://127.0.0.1:8770/api")
 PY = None
 
 
@@ -100,6 +101,55 @@ def main():
         elif path == "/stats/analysis":
             extra = "score=%d concl=%d" % (d["data"]["overall"], len(d["data"]["conclusions"]))
         T("统计 " + path, okv, extra)
+
+    print("== 期限日历 ==")
+    s, d = call("GET", "/calendar?year=2026&month=9")
+    cal = d.get("data", {})
+    T("日历接口", s == 200 and "days" in cal,
+      "本月 %d 项，逾期 %d 项" % (cal.get("summary", {}).get("total", 0),
+                              cal.get("summary", {}).get("overdue_total", 0)))
+    s, d = call("GET", "/calendar?year=2026&month=10")
+    T("切换月份", s == 200 and cal is not None and d["data"]["month"] == 10)
+    kinds = sorted({x["kind"] for v in cal.get("days", {}).values() for x in v})
+    T("日历事项类型", len(kinds) > 0, "、".join(kinds))
+
+    print("== 深度分析 ==")
+    s, d = call("GET", "/stats/deep")
+    deep = d.get("data", {})
+    okv = s == 200 and all(k in deep for k in
+                           ("inventors", "ipc_section", "patent_age", "grant_rate", "agency", "stack"))
+    T("深度分析接口", okv, "发明人 %d 位，IPC 部 %d 个" % (
+        len(deep.get("inventors", [])), len(deep.get("ipc_section", []))))
+    T("发明人排除法人主体",
+      all("公司" not in x["name"] for x in deep.get("inventors", [])),
+      "、".join(x["name"] for x in deep.get("inventors", [])[:4]))
+    T("专利年龄分布完整", sum(x["value"] for x in deep.get("patent_age", [])) > 0)
+
+    print("== 表格导入导出 ==")
+    s, d = call("GET", "/export/csv")
+    csv_text = d.get("data", {}).get("csv", "")
+    T("导出 CSV", s == 200 and csv_text.count("\n") >= 29,
+      "%d 行" % csv_text.count("\n"))
+    s, d = call("GET", "/export/xls")
+    xls = d.get("data", {}).get("xml", "")
+    T("导出 Excel(XML)", s == 200 and "<Workbook" in xls and xls.count("<Worksheet ") == 2,
+      "%d 字节" % len(xls))
+    s, d = call("GET", "/template/csv")
+    tpl = d.get("data", {}).get("csv", "")
+    T("下载导入模板", s == 200 and "名称" in tpl.splitlines()[0],
+      "%d 字段" % len(d.get("data", {}).get("fields", [])))
+    s, d = call("POST", "/import/csv", {"csv": tpl, "mode": "append"})
+    T("CSV 追加导入", s == 200 and d["data"]["created"] == 1, d.get("data"))
+    s, d = call("POST", "/import/csv", {"csv": tpl, "mode": "append"})
+    T("重复导入按申请号更新", s == 200 and d["data"]["updated"] == 1, d.get("data"))
+    bad = tpl.splitlines()[0] + "\n" + ",".join(
+        ["错误类型", "发明专利", "非法类型测试行", "SMOKE-X", "", "2026-01-01"] + [""] * 20)
+    s, d = call("POST", "/import/csv", {"csv": bad, "mode": "append"})
+    T("非法类型行被拦截", s == 200 and d["data"]["skipped"] == 1 and d["data"]["error_total"] == 1)
+    s, d = call("POST", "/import/csv", {"csv": "", "mode": "append"})
+    T("空内容返回错误", s == 400)
+    s, d = call("POST", "/reset", {"mode": "demo"})
+    T("清理测试数据并恢复演示", s == 200 and d["data"]["assets"] == 29, d.get("data"))
 
     print("== 战略接口 ==")
     s, d = call("GET", "/strategies")
